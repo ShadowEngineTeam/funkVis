@@ -8,8 +8,6 @@ import grig.audio.FFT;
 import grig.audio.FFTVisualization;
 import lime.media.AudioSource;
 
-using grig.audio.lime.UInt8ArrayTools;
-
 typedef Bar =
 {
     var value:Float;
@@ -193,10 +191,18 @@ class SpectralAnalyzer
 
         return levels;
         #else
-        var data:lime.utils.Int16Array = cast audioSource.buffer.data;
-        var numOctets = Std.int(audioSource.buffer.bitsPerSample / 8);
-        var channels = audioSource.buffer.channels;
-        var wantedLength = fftN * numOctets * channels;
+        var buffer = audioSource.buffer;
+
+        #if lime_miniaudio
+        if (buffer == null || buffer.data == null || buffer.format != lime.media.miniaudio.MAFormat.F32)
+        #else
+        if (buffer == null || buffer.data == null || buffer.bitsPerSample != 32)
+        #end
+            return levels = [for (bar in 0...barCount) {value: 0, peak: 0}];
+
+        // F32 samples are interleaved, one element per channel per frame, so currentFrame is an element index.
+        var data:lime.utils.Float32Array = cast buffer.data;
+        var channels = buffer.channels;
         var startFrame = audioClip.currentFrame;
 
         if (startFrame < 0)
@@ -205,32 +211,32 @@ class SpectralAnalyzer
         var dataLength = data.length;
 
         // Make sure its a goddamn complete frame!
-        var frameSize = numOctets * channels;
-        var startByte = startFrame - (startFrame % frameSize);
+        var startIndex = startFrame - (startFrame % channels);
 
-        if (startByte >= dataLength)
+        if (startIndex >= dataLength)
             return levels = [for (bar in 0...barCount) {value: 0, peak: 0}];
 
-        var endByte = min(startByte + wantedLength, dataLength);
+        var endIndex = min(startIndex + fftN * channels, dataLength);
 
-        var segment = data.subarray(startByte, endByte);
-		getSignal(segment, audioSource.buffer.bitsPerSample); // Sets _buffer
+        var segment = data.subarray(startIndex, endIndex);
+        getSignal(segment); // Sets _buffer
 
-		if (audioSource.buffer.channels > 1) {
-            var wantedArrayLength = Std.int(_buffer.length / audioSource.buffer.channels);
-            if (_mixedCache.length != wantedArrayLength)
-			    _mixedCache.resize(wantedArrayLength);
+        var frames = Std.int(_buffer.length / channels);
 
-			for (i in 0..._mixedCache.length) {
-				_mixedCache[i] = 0.0;
-				for (c in 0...audioSource.buffer.channels) {
-					_mixedCache[i] += 0.7 * _buffer[i*audioSource.buffer.channels+c];
-				}
-                _mixedCache[i] *= blackmanWindow[i];
-			}
-			//_buffer = _mixedCache;
-		}
+        if (_mixedCache.length != fftN)
+            _mixedCache.resize(fftN);
 
+        for (i in 0...fftN) {
+            var value = 0.0;
+            if (i < frames) {
+                for (c in 0...channels) {
+                    value += _buffer[i * channels + c];
+                }
+                if (channels > 1)
+                    value *= 0.7;
+            }
+            _mixedCache[i] = value * blackmanWindow[i];
+        }
 		var range = 16;
         var freqs = fft.calcFreq(_mixedCache);
 
@@ -270,35 +276,14 @@ class SpectralAnalyzer
 
     // Prevents a memory leak by reusing array
     var _buffer:Array<Float> = [];
-	function getSignal(data:lime.utils.UInt8Array, bitsPerSample:Int):Array<Float>
+	function getSignal(data:lime.utils.Float32Array):Array<Float>
     {
-        switch(bitsPerSample)
-        {
-            case 8:
-                _buffer.resize(data.length);
-                for (i in 0...data.length)
-                    _buffer[i] = data[i] / 128.0;
+        _buffer.resize(data.length);
+        for (i in 0...data.length)
+            _buffer[i] = data[i];
 
-            case 16:
-                _buffer.resize(Std.int(data.length / 2));
-                for (i in 0..._buffer.length)
-                    _buffer[i] = data.getInt16(i * 2) / 32767.0;
-
-            case 24:
-                _buffer.resize(Std.int(data.length / 3));
-                for (i in 0..._buffer.length)
-                    _buffer[i] = data.getInt24(i * 3) / 8388607.0;
-
-            case 32:
-                _buffer.resize(Std.int(data.length / 4));
-                for (i in 0..._buffer.length)
-                    _buffer[i] = data.getInt32(i * 4) / 2147483647.0;
-
-            default: trace('Unknown integer audio format');
-        }
         return _buffer;
     }
-
     @:generic
     static inline function clamp<T:Float>(val:T, min:T, max:T):T
     {

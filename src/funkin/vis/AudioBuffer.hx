@@ -1,13 +1,13 @@
 package funkin.vis;
 
-import lime.utils.Int16Array;
+import lime.utils.Float32Array;
 
 class AudioBuffer
 {
-    public var data(default, null):Int16Array;
+    public var data(default, null):Float32Array;
     public var sampleRate(default, null):Float;
 
-    public function new(data:Int16Array, sampleRate:Float)
+    public function new(data:Float32Array, sampleRate:Float)
     {
         this.data = data;
         this.sampleRate = sampleRate;
